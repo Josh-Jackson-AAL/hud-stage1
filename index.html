@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HUD Stage 1</title>
+<style>
+  :root { --bg:#0b0d10; --panel:#151a20; --line:#26303a; --text:#e8eef3; --dim:#8a97a3; --accent:#3ee08f; --warn:#ffb340; --bad:#ff5a5a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,system-ui,sans-serif; }
+  main { max-width:480px; margin:0 auto; padding:16px; padding-top:max(16px,env(safe-area-inset-top)); }
+  h1 { font-size:18px; margin:4px 0 12px; letter-spacing:.02em; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--dim); margin-bottom:6px; }
+  input { width:100%; background:#0e1216; border:1px solid var(--line); color:var(--text); border-radius:10px; padding:10px 12px; font:inherit; }
+  .row { display:flex; gap:8px; }
+  .row > * { flex:1; }
+  button { background:#1f2833; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:14px; font:600 16px/1 inherit; font-family:inherit; width:100%; }
+  button.primary { background:var(--accent); color:#04130b; border-color:var(--accent); }
+  button.small { padding:9px; font-size:14px; }
+  .hidden { display:none !important; }
+  .stat { display:grid; grid-template-columns:1fr 1fr; gap:8px 12px; font-size:14px; }
+  .stat div span { display:block; color:var(--dim); font-size:12px; }
+  .big { font-size:44px; font-weight:700; text-align:center; font-variant-numeric:tabular-nums; }
+  .sub { text-align:center; color:var(--dim); font-size:14px; }
+  #arrowWrap { display:flex; justify-content:center; padding:10px 0; }
+  #arrow { width:220px; height:220px; transition:transform .08s linear; }
+  .pill { display:inline-block; padding:3px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--dim); }
+  .ok { color:var(--accent); border-color:var(--accent); }
+  .warnc { color:var(--warn); border-color:var(--warn); }
+  .badc { color:var(--bad); border-color:var(--bad); }
+  .note { font-size:13px; color:var(--dim); }
+  .seg { display:flex; gap:6px; margin-bottom:10px; }
+  .seg button { padding:10px; font-size:14px; }
+  .seg button.on { background:var(--accent); color:#04130b; border-color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>HUD · Stage 1</h1>
+
+  <!-- SETUP -->
+  <section id="setup">
+    <div class="panel">
+      <label for="room">Room code (same on both phones)</label>
+      <div class="row">
+        <input id="room" autocomplete="off" autocapitalize="characters">
+        <button class="small" id="shareBtn" style="flex:0 0 90px">Share</button>
+      </div>
+    </div>
+    <div class="panel">
+      <button class="primary" id="asPointer">I'm the pointer</button>
+      <div style="height:8px"></div>
+      <button id="asTarget">I'm the target</button>
+      <p class="note">Tapping asks for location and compass access. Keep the screen on and the phone in portrait.</p>
+    </div>
+  </section>
+
+  <!-- TARGET -->
+  <section id="target" class="hidden">
+    <div class="panel">
+      <div class="sub">Broadcasting as target · room <b id="tRoom"></b></div>
+      <div class="big" id="tAcc">—</div>
+      <div class="sub">GPS accuracy</div>
+    </div>
+    <div class="panel stat">
+      <div><span>Link</span><b id="tLink" class="pill">connecting</b></div>
+      <div><span>Last sent</span><b id="tSent">—</b></div>
+      <div><span>Lat</span><b id="tLat">—</b></div>
+      <div><span>Lon</span><b id="tLon">—</b></div>
+    </div>
+  </section>
+
+  <!-- POINTER -->
+  <section id="pointer" class="hidden">
+    <div class="panel">
+      <div class="seg">
+        <button id="modeLive" class="on">Live target</button>
+        <button id="modeFixed">Fixed point</button>
+      </div>
+      <div id="fixedInputs" class="hidden">
+        <div class="row">
+          <div><label>Lat</label><input id="fLat" inputmode="decimal" value="-33.85681"></div>
+          <div><label>Lon</label><input id="fLon" inputmode="decimal" value="151.21514"></div>
+        </div>
+        <p class="note">Default is the Sydney Opera House. Use any landmark you can see.</p>
+      </div>
+      <div id="arrowWrap">
+        <svg id="arrow" viewBox="0 0 100 100" aria-label="Direction to target">
+          <circle cx="50" cy="50" r="46" fill="none" stroke="#26303a" stroke-width="2"/>
+          <path d="M50 8 L70 52 L54 46 L54 88 L46 88 L46 46 L30 52 Z" fill="#3ee08f"/>
+        </svg>
+      </div>
+      <div class="big" id="pDist">—</div>
+      <div class="sub" id="pSub">waiting for positions</div>
+    </div>
+    <div class="panel stat">
+      <div><span>Bearing to target</span><b id="pBear">—</b></div>
+      <div><span>Your heading</span><b id="pHead">—</b></div>
+      <div><span>Your GPS</span><b id="pAcc" class="pill">—</b></div>
+      <div><span>Target GPS</span><b id="pTAcc" class="pill">—</b></div>
+      <div><span>Target age</span><b id="pAge" class="pill">—</b></div>
+      <div><span>Link</span><b id="pLink" class="pill">—</b></div>
+    </div>
+    <div class="panel">
+      <label>Heading offset: <b id="offVal">0.0°</b></label>
+      <div class="row">
+        <button class="small" id="offMinus">−1°</button>
+        <button class="small" id="offPlus">+1°</button>
+        <button class="small" id="offZero">Reset</button>
+      </div>
+      <div style="height:8px"></div>
+      <button class="small" id="calib">Calibrate: I'm pointing straight at the target</button>
+      <p class="note">Calibrate once in Fixed point mode against a landmark. The offset covers magnetic-vs-true north and any compass bias, and it is saved on this phone.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+  const LIBS = ['https://cdn.jsdelivr.net/npm/mqtt@5/dist/mqtt.min.js', 'https://unpkg.com/mqtt@5/dist/mqtt.min.js'];
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  };
+
+  // ---- room code
+  const params = new URLSearchParams(location.search);
+  const genCode = () => Array.from(crypto.getRandomValues(new Uint8Array(6)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[b % 32]).join('');
+  $('room').value = (params.get('room') || store.get('room', '') || genCode()).toUpperCase();
+  const roomCode = () => $('room').value.trim().toUpperCase() || genCode();
+  const shareUrl = () => location.origin + location.pathname + '?room=' + encodeURIComponent(roomCode());
+  $('shareBtn').onclick = async () => {
+    try { if (navigator.share) await navigator.share({ title: 'HUD room', url: shareUrl() }); else { await navigator.clipboard.writeText(shareUrl()); $('shareBtn').textContent = 'Copied'; } } catch {}
+  };
+
+  // ---- maths
+  const rad = d => d * Math.PI / 180, deg = r => r * 180 / Math.PI;
+  const norm = a => ((a % 360) + 360) % 360;
+  function bearing(a, b) {
+    const p1 = rad(a.lat), p2 = rad(b.lat), dl = rad(b.lon - a.lon);
+    return norm(deg(Math.atan2(Math.sin(dl) * Math.cos(p2), Math.cos(p1) * Math.sin(p2) - Math.sin(p1) * Math.cos(p2) * Math.cos(dl))));
+  }
+  function distance(a, b) {
+    const R = 6371000, dp = rad(b.lat - a.lat), dl = rad(b.lon - a.lon);
+    const h = Math.sin(dp / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dl / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  const fmtDist = m => m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10000 ? 2 : 1) + ' km';
+  const accClass = a => a <= 10 ? 'ok' : a <= 25 ? 'warnc' : 'badc';
+  const setPill = (el, text, cls) => { el.textContent = text; el.className = 'pill ' + (cls || ''); };
+
+  // ---- MQTT
+  function loadScript(src) {
+    return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = rej; document.head.appendChild(s); });
+  }
+  // Tries each public broker in turn; sticks with the first one that connects.
+  async function connect(onStatus, onReady) {
+    for (const src of LIBS) { if (window.mqtt) break; try { await loadScript(src); } catch {} }
+    if (!window.mqtt) { onStatus('no library', 'badc'); return; }
+    let idx = 0;
+    const tryBroker = () => {
+      onStatus('connecting', 'warnc');
+      const client = mqtt.connect(BROKERS[idx], { clientId: 'hud_' + genCode(), reconnectPeriod: 2000, connectTimeout: 8000 });
+      let ever = false;
+      const giveUp = setTimeout(() => { if (!ever) { client.end(true); idx = (idx + 1) % BROKERS.length; tryBroker(); } }, 10000);
+      client.on('connect', () => { if (!ever) { ever = true; clearTimeout(giveUp); onReady(client); } onStatus('live', 'ok'); });
+      client.on('reconnect', () => { if (ever) onStatus('reconnecting', 'warnc'); });
+      client.on('offline', () => { if (ever) onStatus('offline', 'badc'); });
+    };
+    tryBroker();
+  }
+  const topic = () => 'hihiri-hud/v1/' + roomCode() + '/target';
+
+  // ---- wake lock
+  async function keepAwake() {
+    try { if ('wakeLock' in navigator) { let l = await navigator.wakeLock.request('screen'); document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible') { try { l = await navigator.wakeLock.request('screen'); } catch {} } }); } } catch {}
+  }
+
+  function watchGPS(cb, onErr) {
+    if (!navigator.geolocation) { onErr('no GPS'); return; }
+    navigator.geolocation.watchPosition(
+      p => cb({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy, t: Date.now() }),
+      e => onErr(e.code === 1 ? 'denied' : 'error'),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+  }
+
+  // ---- TARGET
+  $('asTarget').onclick = async () => {
+    store.set('room', roomCode());
+    $('setup').classList.add('hidden'); $('target').classList.remove('hidden');
+    $('tRoom').textContent = roomCode();
+    keepAwake();
+    let client = null;
+    connect((t, c) => setPill($('tLink'), t, c), c => { client = c; });
+    let last = 0;
+    watchGPS(pos => {
+      $('tAcc').textContent = '±' + Math.round(pos.acc) + ' m';
+      $('tAcc').style.color = pos.acc <= 10 ? 'var(--accent)' : pos.acc <= 25 ? 'var(--warn)' : 'var(--bad)';
+      $('tLat').textContent = pos.lat.toFixed(5); $('tLon').textContent = pos.lon.toFixed(5);
+      if (client && client.connected && Date.now() - last > 1000) {
+        last = Date.now();
+        client.publish(topic(), JSON.stringify(pos), { qos: 0, retain: true });
+        $('tSent').textContent = new Date().toLocaleTimeString();
+      }
+    }, e => { $('tAcc').textContent = 'GPS ' + e; });
+  };
+
+  // ---- POINTER
+  let me = null, live = null, fixedMode = false, headingRaw = null, sx = 0, sy = 0;
+  let offset = parseFloat(store.get('offset', '0')) || 0;
+  const showOffset = () => { $('offVal').textContent = (offset >= 0 ? '+' : '') + offset.toFixed(1) + '°'; store.set('offset', String(offset)); };
+  showOffset();
+  $('offMinus').onclick = () => { offset -= 1; showOffset(); };
+  $('offPlus').onclick = () => { offset += 1; showOffset(); };
+  $('offZero').onclick = () => { offset = 0; showOffset(); };
+
+  function setMode(fixed) {
+    fixedMode = fixed;
+    $('modeFixed').classList.toggle('on', fixed); $('modeLive').classList.toggle('on', !fixed);
+    $('fixedInputs').classList.toggle('hidden', !fixed);
+  }
+  $('modeLive').onclick = () => setMode(false);
+  $('modeFixed').onclick = () => setMode(true);
+
+  function currentTarget() {
+    if (fixedMode) {
+      const lat = parseFloat($('fLat').value), lon = parseFloat($('fLon').value);
+      return isFinite(lat) && isFinite(lon) ? { lat, lon, acc: 0, t: Date.now(), fixed: true } : null;
+    }
+    return live;
+  }
+
+  function onHeading(h) {
+    // circular low-pass so the arrow doesn't jitter or spin across 0/360
+    const a = rad(h); sx = sx * 0.8 + Math.cos(a) * 0.2; sy = sy * 0.8 + Math.sin(a) * 0.2;
+    headingRaw = norm(deg(Math.atan2(sy, sx)));
+  }
+
+  async function startCompass() {
+    const screenAngle = () => (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') { $('pSub').textContent = 'compass permission denied'; return; } } catch { $('pSub').textContent = 'compass permission failed'; return; }
+    }
+    let gotAbs = false;
+    window.addEventListener('deviceorientationabsolute', e => { if (e.alpha != null) { gotAbs = true; onHeading(norm(360 - e.alpha + screenAngle())); } });
+    window.addEventListener('deviceorientation', e => {
+      if (e.webkitCompassHeading != null) onHeading(norm(e.webkitCompassHeading + screenAngle()));
+      else if (!gotAbs && e.absolute && e.alpha != null) onHeading(norm(360 - e.alpha + screenAngle()));
+    });
+  }
+
+  $('calib').onclick = () => {
+    const t = currentTarget();
+    if (!me || !t || headingRaw == null) return;
+    offset = Math.round(((bearing(me, t) - headingRaw + 540) % 360 - 180) * 10) / 10;
+    showOffset();
+  };
+
+  function render() {
+    const t = currentTarget();
+    const hasHead = headingRaw != null;
+    const heading = hasHead ? norm(headingRaw + offset) : null;
+    $('pHead').textContent = hasHead ? Math.round(heading) + '°' : 'no compass';
+    if (me) setPill($('pAcc'), '±' + Math.round(me.acc) + ' m', accClass(me.acc));
+    if (t && !t.fixed) {
+      setPill($('pTAcc'), '±' + Math.round(t.acc) + ' m', accClass(t.acc));
+      const age = (Date.now() - t.t) / 1000;
+      setPill($('pAge'), age < 60 ? Math.round(age) + ' s' : Math.round(age / 60) + ' min', age < 5 ? 'ok' : age < 30 ? 'warnc' : 'badc');
+    } else { setPill($('pTAcc'), fixedMode ? 'fixed' : '—'); setPill($('pAge'), fixedMode ? 'fixed' : '—'); }
+
+    if (me && t) {
+      const b = bearing(me, t), d = distance(me, t);
+      $('pBear').textContent = Math.round(b) + '°';
+      $('pDist').textContent = fmtDist(d);
+      // GPS uncertainty expressed as an angle at this range
+      const err = Math.min(90, deg(Math.atan2((me.acc || 0) + (t.acc || 0), Math.max(d, 1))));
+      $('pSub').textContent = 'position uncertainty ≈ ±' + Math.round(err) + '° at this range';
+      if (hasHead) $('arrow').style.transform = 'rotate(' + norm(b - heading) + 'deg)';
+    } else {
+      $('pSub').textContent = !me ? 'waiting for your GPS' : 'waiting for target';
+    }
+    requestAnimationFrame(render);
+  }
+
+  $('asPointer').onclick = async () => {
+    store.set('room', roomCode());
+    await startCompass(); // must run inside the tap on iOS
+    $('setup').classList.add('hidden'); $('pointer').classList.remove('hidden');
+    keepAwake();
+    watchGPS(p => { me = p; }, e => { $('pSub').textContent = 'GPS ' + e; });
+    requestAnimationFrame(render);
+    connect((t, c) => setPill($('pLink'), t, c), client => {
+      client.on('connect', () => client.subscribe(topic())); // re-subscribe after reconnects
+      client.subscribe(topic());
+      client.on('message', (_, msg) => { try { const p = JSON.parse(msg.toString()); if (isFinite(p.lat) && isFinite(p.lon)) live = p; } catch {} });
+    });
+  };
+})();
+</script>
+</body>
+</html>
