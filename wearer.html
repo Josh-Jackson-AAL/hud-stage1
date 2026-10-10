@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HUD Wearer</title>
+<style>
+  :root { --bg:#0b0d10; --panel:#151a20; --line:#26303a; --text:#e8eef3; --dim:#8a97a3; --accent:#3ee08f; --warn:#ffb340; --bad:#ff5a5a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,system-ui,sans-serif; }
+  main { max-width:480px; margin:0 auto; padding:16px; padding-top:max(16px,env(safe-area-inset-top)); }
+  h1 { font-size:18px; margin:4px 0 12px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:14px; margin-bottom:12px; }
+  label { display:block; font-size:13px; color:var(--dim); margin:0 0 6px; }
+  input { width:100%; background:#0e1216; border:1px solid var(--line); color:var(--text); border-radius:10px; padding:10px 12px; font:inherit; margin-bottom:10px; }
+  button { background:#1f2833; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:14px; font:600 16px/1 -apple-system,system-ui,sans-serif; width:100%; touch-action:manipulation; }
+  button.primary { background:var(--accent); color:#04130b; border-color:var(--accent); }
+  button.small { padding:9px; font-size:14px; }
+  .row { display:flex; gap:8px; } .row > * { flex:1; }
+  .stat { display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; font-size:15px; }
+  .stat div span { display:block; color:var(--dim); font-size:12px; }
+  .pill { display:inline-block; padding:3px 9px; border-radius:99px; font-size:12px; border:1px solid var(--line); color:var(--dim); }
+  .ok { color:var(--accent); border-color:var(--accent); } .warnc { color:var(--warn); border-color:var(--warn); } .badc { color:var(--bad); border-color:var(--bad); }
+  .note { font-size:13px; color:var(--dim); margin:8px 0 0; }
+  .big { font-size:40px; font-weight:700; text-align:center; font-variant-numeric:tabular-nums; }
+  .hidden { display:none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>HUD · Wearer</h1>
+
+  <!-- One-time setup. The password stays on this phone only. -->
+  <section id="setup" class="panel">
+    <label for="host">Server address</label>
+    <input id="host" autocomplete="off" autocapitalize="off" spellcheck="false" value="hf12d22a.ala.asia-southeast1.emqxsl.com">
+    <label for="user">Username</label>
+    <input id="user" autocomplete="username" autocapitalize="off" value="hud-phone">
+    <label for="pass">Password</label>
+    <input id="pass" type="password" autocomplete="current-password">
+    <button class="primary" id="start">Start sending my position</button>
+    <p class="note">Tapping Start asks for location and compass access. The password is saved on this phone only, never in the page's code.</p>
+  </section>
+
+  <section id="live" class="hidden">
+    <div class="panel">
+      <div class="big" id="hdg">—</div>
+      <p class="note" style="text-align:center;margin-top:0">Heading sent to the glasses (phone's top edge)</p>
+    </div>
+    <div class="panel stat">
+      <div><span>Server</span><b id="link" class="pill">connecting</b></div>
+      <div><span>Round trip</span><b id="echo" class="pill">—</b></div>
+      <div><span>GPS accuracy</span><b id="acc" class="pill">—</b></div>
+      <div><span>Last sent</span><b id="sent">—</b></div>
+      <div><span>Lat</span><b id="lat">—</b></div>
+      <div><span>Lon</span><b id="lon">—</b></div>
+    </div>
+    <div class="panel">
+      <label>Heading offset: <b id="offVal">0.0°</b></label>
+      <div class="row">
+        <button class="small" id="offMinus">−1°</button>
+        <button class="small" id="offPlus">+1°</button>
+        <button class="small" id="offZero">Reset</button>
+      </div>
+      <p class="note">Corrects the phone compass (magnetic north and bias). Point the phone's top edge at a landmark you know the bearing of, then adjust until the heading matches.</p>
+    </div>
+    <button id="stop">Stop and edit settings</button>
+    <p class="note">Keep this page open with the screen on. Phones pause location updates when the page is in the background or the screen locks.</p>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.15.2/dist/mqtt.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const TOPIC = 'hud/v1/wearer';            // the glasses subscribe to this
+  const SEND_EVERY_MS = 1000;
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  };
+  const norm = a => ((a % 360) + 360) % 360;
+  const setPill = (el, text, cls) => { el.textContent = text; el.className = 'pill ' + (cls || ''); };
+
+  // Restore saved settings
+  $('host').value = store.get('hud-host', $('host').value);
+  $('user').value = store.get('hud-user', $('user').value);
+  $('pass').value = store.get('hud-pass', '');
+
+  let client = null, me = null, headingRaw = null, sx = 0, sy = 0, lastSent = 0, timer = null, wake = null, watchId = null;
+  let offset = parseFloat(store.get('hud-offset', '0')) || 0;
+  const showOffset = () => { $('offVal').textContent = (offset >= 0 ? '+' : '') + offset.toFixed(1) + '°'; store.set('hud-offset', String(offset)); };
+  showOffset();
+  $('offMinus').onclick = () => { offset -= 1; showOffset(); };
+  $('offPlus').onclick = () => { offset += 1; showOffset(); };
+  $('offZero').onclick = () => { offset = 0; showOffset(); };
+
+  // Smooth the compass so the heading doesn't jitter or jump across 0/360
+  function onHeading(h) {
+    const a = h * Math.PI / 180; sx = sx * 0.8 + Math.cos(a) * 0.2; sy = sy * 0.8 + Math.sin(a) * 0.2;
+    headingRaw = norm(Math.atan2(sy, sx) * 180 / Math.PI);
+  }
+  async function startCompass() {
+    const screenAngle = () => (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      try { if (await DeviceOrientationEvent.requestPermission() !== 'granted') return false; } catch { return false; }
+    }
+    let gotAbs = false;
+    window.addEventListener('deviceorientationabsolute', e => { if (e.alpha != null) { gotAbs = true; onHeading(norm(360 - e.alpha + screenAngle())); } });
+    window.addEventListener('deviceorientation', e => {
+      if (e.webkitCompassHeading != null) onHeading(norm(e.webkitCompassHeading + screenAngle()));
+      else if (!gotAbs && e.absolute && e.alpha != null) onHeading(norm(360 - e.alpha + screenAngle()));
+    });
+    return true;
+  }
+
+  function connect() {
+    const host = $('host').value.trim(), username = $('user').value.trim(), password = $('pass').value;
+    setPill($('link'), 'connecting', 'warnc');
+    client = mqtt.connect('wss://' + host + ':8084/mqtt', {
+      clientId: 'hud-wearer-' + Math.random().toString(16).slice(2, 8),
+      username, password, reconnectPeriod: 3000, connectTimeout: 10000
+    });
+    client.on('connect', () => { setPill($('link'), 'live', 'ok'); client.subscribe(TOPIC); });
+    client.on('reconnect', () => setPill($('link'), 'reconnecting', 'warnc'));
+    client.on('offline', () => setPill($('link'), 'offline', 'badc'));
+    client.on('error', err => setPill($('link'), /auth|not authorized|bad user/i.test(String(err && err.message)) ? 'wrong login' : 'error', 'badc'));
+    // Hearing our own message back proves the server received it
+    client.on('message', (t, msg) => {
+      try { const p = JSON.parse(msg.toString()); if (p.t) setPill($('echo'), Math.max(0, Date.now() - p.t) + ' ms', 'ok'); } catch {}
+    });
+  }
+
+  function send() {
+    if (!client || !client.connected || !me) return;
+    const hdg = headingRaw == null ? null : Math.round(norm(headingRaw + offset) * 10) / 10;
+    const payload = { lat: +me.lat.toFixed(6), lon: +me.lon.toFixed(6), acc: Math.round(me.acc), hdg, t: Date.now() };
+    client.publish(TOPIC, JSON.stringify(payload), { qos: 0, retain: true });
+    lastSent = Date.now();
+    $('sent').textContent = new Date().toLocaleTimeString();
+  }
+
+  function render() {
+    if (headingRaw != null) $('hdg').textContent = String(Math.round(norm(headingRaw + offset))).padStart(3, '0') + '°';
+    if (me) {
+      setPill($('acc'), '±' + Math.round(me.acc) + ' m', me.acc <= 10 ? 'ok' : me.acc <= 25 ? 'warnc' : 'badc');
+      $('lat').textContent = me.lat.toFixed(5); $('lon').textContent = me.lon.toFixed(5);
+    }
+    requestAnimationFrame(render);
+  }
+
+  $('start').onclick = async () => {
+    if (!$('pass').value) { $('pass').focus(); return; }
+    store.set('hud-host', $('host').value.trim()); store.set('hud-user', $('user').value.trim()); store.set('hud-pass', $('pass').value);
+    const compassOk = await startCompass();          // must run inside the tap on iPhone
+    if (!compassOk) $('hdg').textContent = 'no compass';
+    $('setup').classList.add('hidden'); $('live').classList.remove('hidden');
+    try { if ('wakeLock' in navigator) wake = await navigator.wakeLock.request('screen'); } catch {}
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible') { try { wake = await navigator.wakeLock.request('screen'); } catch {} }
+    });
+    watchId = navigator.geolocation.watchPosition(
+      p => { me = { lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy }; },
+      e => setPill($('acc'), e.code === 1 ? 'denied' : 'error', 'badc'),
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
+    );
+    connect();
+    timer = setInterval(send, SEND_EVERY_MS);
+    requestAnimationFrame(render);
+  };
+
+  $('stop').onclick = () => {
+    clearInterval(timer);
+    if (watchId != null) navigator.geolocation.clearWatch(watchId);
+    if (client) client.end(true);
+    try { wake && wake.release(); } catch {}
+    $('live').classList.add('hidden'); $('setup').classList.remove('hidden');
+  };
+})();
+</script>
+</body>
+</html>
