@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>HUD Places</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --bg:#0b0d10; --panel:#151a20; --line:#26303a; --text:#e8eef3; --dim:#8a97a3; --accent:#3ee08f; --warn:#ffb340; --bad:#ff5a5a; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font:16px/1.4 -apple-system,system-ui,sans-serif; }
+  #map { position:fixed; inset:0; }
+  .bar { position:fixed; z-index:1000; left:10px; right:10px; top:max(10px,env(safe-area-inset-top)); display:flex; gap:8px; }
+  .bar form { flex:1; display:flex; }
+  input, select { width:100%; background:#0e1216; border:1px solid var(--line); color:var(--text); border-radius:10px; padding:10px 12px; font:inherit; }
+  button { background:#1f2833; color:var(--text); border:1px solid var(--line); border-radius:12px; padding:10px 14px; font:600 15px/1 -apple-system,system-ui,sans-serif; touch-action:manipulation; }
+  button.primary { background:var(--accent); color:#04130b; border-color:var(--accent); }
+  button.danger { color:var(--bad); border-color:var(--bad); }
+  .pill { position:fixed; z-index:1000; left:10px; bottom:max(10px,env(safe-area-inset-bottom)); padding:5px 10px; border-radius:99px; font-size:12px; background:var(--panel); border:1px solid var(--line); color:var(--dim); }
+  .ok { color:var(--accent); border-color:var(--accent); } .warnc { color:var(--warn); border-color:var(--warn); } .badc { color:var(--bad); border-color:var(--bad); }
+  .sheet { position:fixed; z-index:1001; left:0; right:0; bottom:0; background:var(--panel); border-top:1px solid var(--line); border-radius:16px 16px 0 0; padding:16px; padding-bottom:max(16px,env(safe-area-inset-bottom)); max-width:520px; margin:0 auto; }
+  .sheet h2 { font-size:16px; margin:0 0 10px; }
+  label { display:block; font-size:13px; color:var(--dim); margin:8px 0 6px; }
+  .icons { display:flex; gap:8px; flex-wrap:wrap; }
+  .icons button { display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 10px; font-size:12px; font-weight:500; }
+  .icons button.sel { border-color:var(--accent); color:var(--accent); }
+  .icons img { width:32px; height:32px; image-rendering:pixelated; }
+  .row { display:flex; gap:8px; margin-top:14px; } .row > * { flex:1; }
+  .note { font-size:12px; color:var(--dim); margin:8px 0 0; }
+  .list { max-height:40vh; overflow:auto; margin-top:6px; }
+  .item { display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line); }
+  .item img { width:24px; height:24px; image-rendering:pixelated; }
+  .item span { flex:1; }
+  .hidden { display:none !important; }
+  .leaflet-container { background:#1a1f25; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="bar">
+  <form id="searchForm"><input id="q" placeholder="Search a place or address" autocomplete="off"></form>
+  <button id="locate" title="Go to my location">◎</button>
+  <button id="listBtn" title="Saved places">☰</button>
+</div>
+<div id="status" class="pill">connecting…</div>
+
+<!-- Login (shares the saved login with the wearer page) -->
+<section id="login" class="sheet hidden">
+  <h2>Server login</h2>
+  <label for="host">Server address</label>
+  <input id="host" autocapitalize="off" spellcheck="false" value="hf12d22a.ala.asia-southeast1.emqxsl.com">
+  <label for="user">Username</label>
+  <input id="user" autocapitalize="off" value="hud-phone">
+  <label for="pass">Password</label>
+  <input id="pass" type="password">
+  <div class="row"><button class="primary" id="loginGo">Connect</button></div>
+  <p class="note">Saved on this phone only, never in the page's code.</p>
+</section>
+
+<!-- Add / edit a place -->
+<section id="editor" class="sheet hidden">
+  <h2 id="edTitle">New place</h2>
+  <label for="pname">Name (max 15 characters)</label>
+  <input id="pname" maxlength="15" placeholder="e.g. Home">
+  <label>Icon</label>
+  <div class="icons" id="iconPick"></div>
+  <div class="row">
+    <button id="edCancel">Cancel</button>
+    <button class="danger hidden" id="edDelete">Delete</button>
+    <button class="primary" id="edSave">Save</button>
+  </div>
+  <p class="note" id="edCoords"></p>
+</section>
+
+<!-- Saved places list -->
+<section id="listSheet" class="sheet hidden">
+  <h2>Saved places</h2>
+  <div class="list" id="list"></div>
+  <div class="row"><button id="listClose">Close</button></div>
+  <p class="note">Tap the map anywhere to add a place. The glasses update within a second or two.</p>
+</section>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.15.2/dist/mqtt.min.js"></script>
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const PREFIX = 'hud/v1/places/';
+  // Same 16x16 icons as the glasses (XBM hex, LSB = leftmost pixel)
+  const ICONS = {
+    home:       { label:'Home',        hex:'00008001400220041008f81f142850085008100b100bf00f00038001c0006000' },
+    station:    { label:'Station',     hex:'00000000f00f1818f81f181808100810f81fd81b8811d81bf81f2004f00f0810' },
+    girlfriend: { label:'Girl Friend', hex:'c007f01f381898321830583498332828c8270c41c08720098003c007e00f8002' },
+  };
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+  };
+  const setStatus = (t, c) => { $('status').textContent = t; $('status').className = 'pill ' + (c || ''); };
+  const show = id => ['login','editor','listSheet'].forEach(s => $(s).classList.toggle('hidden', s !== id));
+
+  // Draw an XBM icon to an image (white on dark, like the OLED)
+  function iconURL(key, scale) {
+    const hex = (ICONS[key] || ICONS.home).hex, c = document.createElement('canvas');
+    c.width = c.height = 16 * scale; const g = c.getContext('2d');
+    g.fillStyle = '#0b0d10'; g.fillRect(0, 0, c.width, c.height); g.fillStyle = '#7fd3ff';
+    for (let y = 0; y < 16; y++) for (let b = 0; b < 2; b++) {
+      const v = parseInt(hex.substr((y * 2 + b) * 2, 2), 16);
+      for (let i = 0; i < 8; i++) if (v & (1 << i)) g.fillRect((b * 8 + i) * scale, y * scale, scale, scale);
+    }
+    return c.toDataURL();
+  }
+  const markerIcon = key => L.icon({ iconUrl: iconURL(key, 2), iconSize: [32, 32], iconAnchor: [16, 16], className: 'hud-pin' });
+
+  // ---------- Map ----------
+  const map = L.map('map', { zoomControl: false }).setView([-33.8688, 151.2093], 13);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+  }).addTo(map);
+  let meDot = null;
+  function locate(pan) {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(p => {
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if (!meDot) meDot = L.circleMarker(ll, { radius: 7, color: '#3ee08f', fillOpacity: 0.9 }).addTo(map);
+      else meDot.setLatLng(ll);
+      if (pan) map.setView(ll, 16);
+    }, () => {}, { enableHighAccuracy: true, timeout: 15000 });
+  }
+  $('locate').onclick = () => locate(true);
+
+  // Search uses OpenStreetMap's Nominatim, only when you press Enter (their limit is 1 request/second)
+  $('searchForm').onsubmit = async e => {
+    e.preventDefault(); const q = $('q').value.trim(); if (!q) return;
+    $('q').blur();
+    try {
+      const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q));
+      const j = await r.json();
+      if (j[0]) map.setView([+j[0].lat, +j[0].lon], 17); else setStatus('no match for "' + q + '"', 'warnc');
+    } catch { setStatus('search failed', 'badc'); }
+  };
+
+  // ---------- Places (mirrors what's on the server) ----------
+  const places = {};   // id -> {name, icon, lat, lon, marker}
+  function upsert(id, p) {
+    if (places[id]) map.removeLayer(places[id].marker);
+    const m = L.marker([p.lat, p.lon], { icon: markerIcon(p.icon) }).addTo(map)
+      .bindTooltip(p.name, { direction: 'top', offset: [0, -14] });
+    m.on('click', () => openEditor({ id, ...p }));
+    places[id] = { ...p, marker: m }; renderList();
+  }
+  function remove(id) { if (places[id]) { map.removeLayer(places[id].marker); delete places[id]; renderList(); } }
+  function renderList() {
+    const ids = Object.keys(places);
+    $('list').innerHTML = ids.length ? '' : '<p class="note">No places yet.</p>';
+    ids.forEach(id => {
+      const p = places[id], d = document.createElement('div'); d.className = 'item';
+      d.innerHTML = `<img src="${iconURL(p.icon, 2)}" alt=""><span></span><button>Go</button>`;
+      d.querySelector('span').textContent = p.name;
+      d.querySelector('button').onclick = () => { show(null); map.setView([p.lat, p.lon], 17); };
+      $('list').appendChild(d);
+    });
+  }
+  $('listBtn').onclick = () => show('listSheet');
+  $('listClose').onclick = () => show(null);
+
+  // ---------- Editor ----------
+  let draft = null, draftPin = null, chosenIcon = 'home';
+  Object.keys(ICONS).forEach(k => {
+    const b = document.createElement('button'); b.dataset.k = k;
+    b.innerHTML = `<img src="${iconURL(k, 2)}" alt="">${ICONS[k].label}`;
+    b.onclick = () => pickIcon(k); $('iconPick').appendChild(b);
+  });
+  function pickIcon(k) {
+    chosenIcon = k;
+    document.querySelectorAll('#iconPick button').forEach(b => b.classList.toggle('sel', b.dataset.k === k));
+    if (draftPin) draftPin.setIcon(markerIcon(k));
+  }
+  function openEditor(p) {
+    draft = p;
+    $('edTitle').textContent = p.id ? 'Edit place' : 'New place';
+    $('pname').value = p.name || '';
+    $('edDelete').classList.toggle('hidden', !p.id);
+    $('edCoords').textContent = p.lat.toFixed(5) + ', ' + p.lon.toFixed(5);
+    pickIcon(p.icon || 'home');
+    show('editor');
+  }
+  map.on('click', e => {
+    if (!client || !client.connected) { setStatus('not connected', 'badc'); return; }
+    if (draftPin) map.removeLayer(draftPin);
+    draftPin = L.marker(e.latlng, { icon: markerIcon(chosenIcon), opacity: 0.7 }).addTo(map);
+    openEditor({ lat: e.latlng.lat, lon: e.latlng.lng, icon: chosenIcon });
+  });
+  function closeEditor() { if (draftPin) { map.removeLayer(draftPin); draftPin = null; } draft = null; show(null); }
+  $('edCancel').onclick = closeEditor;
+  const slug = s => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 14) || 'place';
+  $('edSave').onclick = () => {
+    const name = $('pname').value.trim(); if (!name) { $('pname').focus(); return; }
+    const id = draft.id || (slug(name) + '-' + Math.random().toString(36).slice(2, 6));
+    const body = { name, icon: chosenIcon, lat: +draft.lat.toFixed(6), lon: +draft.lon.toFixed(6), t: Date.now() };
+    client.publish(PREFIX + id, JSON.stringify(body), { qos: 1, retain: true }, err => setStatus(err ? 'save failed' : 'saved ' + name, err ? 'badc' : 'ok'));
+    closeEditor();
+  };
+  $('edDelete').onclick = () => {
+    if (!draft || !draft.id) return;
+    // An empty retained message removes the place from the server (and the glasses)
+    client.publish(PREFIX + draft.id, '', { qos: 1, retain: true }, err => setStatus(err ? 'delete failed' : 'deleted', err ? 'badc' : 'ok'));
+    closeEditor();
+  };
+
+  // ---------- Server ----------
+  let client = null;
+  function connect() {
+    const host = store.get('hud-host', ''), username = store.get('hud-user', ''), password = store.get('hud-pass', '');
+    if (!host || !password) { $('host').value = host || $('host').value; $('user').value = username || $('user').value; show('login'); return; }
+    setStatus('connecting…', 'warnc');
+    client = mqtt.connect('wss://' + host + ':8084/mqtt', {
+      clientId: 'hud-places-' + Math.random().toString(16).slice(2, 8), username, password, reconnectPeriod: 3000, connectTimeout: 10000
+    });
+    client.on('connect', () => { setStatus('live', 'ok'); client.subscribe(PREFIX + '+', { qos: 1 }); });
+    client.on('reconnect', () => setStatus('reconnecting…', 'warnc'));
+    client.on('offline', () => setStatus('offline', 'badc'));
+    client.on('error', err => {
+      const bad = /auth|not authorized|bad user/i.test(String(err && err.message));
+      setStatus(bad ? 'wrong login' : 'error', 'badc');
+      if (bad) { client.end(true); show('login'); }
+    });
+    client.on('message', (topic, msg) => {
+      const id = topic.slice(PREFIX.length);
+      if (!msg.length) { remove(id); return; }
+      try { const p = JSON.parse(msg.toString()); if (isFinite(p.lat) && isFinite(p.lon)) upsert(id, p); } catch {}
+    });
+  }
+  $('loginGo').onclick = () => {
+    if (!$('pass').value) { $('pass').focus(); return; }
+    store.set('hud-host', $('host').value.trim()); store.set('hud-user', $('user').value.trim()); store.set('hud-pass', $('pass').value);
+    show(null); connect();
+  };
+
+  renderList();
+  connect();
+  locate(true);
+})();
+</script>
+</body>
+</html>
