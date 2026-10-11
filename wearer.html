@@ -74,7 +74,9 @@
 (() => {
   const $ = id => document.getElementById(id);
   const TOPIC = 'hud/v1/wearer';            // the glasses subscribe to this
-  const SEND_EVERY_MS = 1000;
+  const SEND_EVERY_MS = 1000;               // full position message
+  const TOPIC_HDG = 'hud/v1/wearer/hdg';    // fast heading-only messages
+  const HDG_EVERY_MS = 100;                 // up to 10 per second, only when the heading changes
   const store = {
     get(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : v; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} }
@@ -88,6 +90,7 @@
   $('pass').value = store.get('hud-pass', '');
 
   let client = null, me = null, headingRaw = null, sx = 0, sy = 0, lastSent = 0, timer = null, wake = null, watchId = null;
+  let hdgTimer = null, lastH = null, lastHT = 0;
   let offset = parseFloat(store.get('hud-offset', '0')) || 0;
   const showOffset = () => { $('offVal').textContent = (offset >= 0 ? '+' : '') + offset.toFixed(1) + '°'; store.set('hud-offset', String(offset)); };
   showOffset();
@@ -140,6 +143,16 @@
     $('sent').textContent = new Date().toLocaleTimeString();
   }
 
+  // Heading only, sent fast so the glasses track smoothly. Skipped when the phone is still.
+  function sendHdg() {
+    if (!client || !client.connected || headingRaw == null) return;
+    const h = Math.round(norm(headingRaw + offset) * 10) / 10, now = Date.now();
+    const moved = lastH == null || Math.abs(((h - lastH + 540) % 360) - 180) >= 0.5;
+    if (!moved && now - lastHT < 1000) return;
+    client.publish(TOPIC_HDG, JSON.stringify({ h }), { qos: 0, retain: false });
+    lastH = h; lastHT = now;
+  }
+
   function render() {
     if (headingRaw != null) $('hdg').textContent = String(Math.round(norm(headingRaw + offset))).padStart(3, '0') + '°';
     if (me) {
@@ -166,11 +179,12 @@
     );
     connect();
     timer = setInterval(send, SEND_EVERY_MS);
+    hdgTimer = setInterval(sendHdg, HDG_EVERY_MS);
     requestAnimationFrame(render);
   };
 
   $('stop').onclick = () => {
-    clearInterval(timer);
+    clearInterval(timer); clearInterval(hdgTimer);
     if (watchId != null) navigator.geolocation.clearWatch(watchId);
     if (client) client.end(true);
     try { wake && wake.release(); } catch {}
